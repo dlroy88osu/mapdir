@@ -17,22 +17,15 @@ go install .
 ```
 mapdir.exe                          # map current dir
 mapdir.exe C:\GitHub\GoLoadThis     # map target dir
-mapdir.exe -init                    # drop a starter mapConfig.toml
-
+mapdir.exe -i                       # drop a starter mapConfig.toml
 mapdir.exe -c                       # adds counts table to see rows of code
-mapdir.exe -counts                  # adds counts table to see rows of code
-
 mapdir.exe -r                       # inject into README.md
-mapdir.exe -readme                  # inject into README.md
-
 mapdir.exe -r="DOCS.md"             # inject into a different file
-mapdir.exe -readme="DOCS.md"        # inject into a different file
-
 mapdir.exe -r C:\GitHub\GoLoadThis  # flags and path combine freely
 mapdir.exe -h                       # usage
 ```
 
-Long forms `--init`, `--readme`, `--readme=NAME`, and `--help` all work too.
+Long forms `--init`, `--counts `, `--readme`, `--readme=NAME`, and `--help` all work too.
 
 ## Actual Output (mapdir.exe -r -c)
 
