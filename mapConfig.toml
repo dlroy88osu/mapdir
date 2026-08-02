@@ -1,0 +1,37 @@
+# mapConfig.toml - stuff listed here is NOT shown or counted.
+#
+# usage:
+#   mapdir [path]              print the tree
+#   mapdir -init [path]        write this file
+#   mapdir -r [path]           inject into README.md
+#   mapdir -r=DOCS.md [path]   inject into a different file
+#
+# -r rewrites whatever sits between these two markers, so drop them
+# into the target file first (they're HTML comments, invisible when
+# rendered):
+#
+#   <!-- mapDir: start -->
+#   <!-- mapDir: end -->
+#
+# Everything between them is replaced on every run; the markers
+# themselves stay put. Anything outside them is left alone.
+#
+# .gitignore is read automatically (including nested ones) - the rules
+# below stack on top of it.
+
+# gitignore-style globs, relative to the mapped root.
+# leading "/" anchors to root, trailing "/" matches dirs only,
+# leading "!" re-includes something an earlier rule dropped.
+ignore = [
+    "*.png",
+    "*.svg",
+    "*.ico",
+    "*.icns",
+]
+
+# bare extensions, dot optional. shorthand for "*.ext" in ignore.
+ignore_exts = [
+	".env",
+	"lock",
+	"exe",
+]
