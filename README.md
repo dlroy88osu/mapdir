@@ -26,6 +26,7 @@ mapdir.exe -h                       # usage
 ```
 
 Long forms `--init`, `--counts `, `--readme`, `--readme=NAME`, and `--help` all work too.
+> Note that `-init` writes the config and exits — it won't also map the directory in the same run.
 
 ## Actual Output (mapdir.exe -r -c)
 
@@ -45,12 +46,12 @@ Long forms `--init`, `--counts `, `--readme`, `--readme=NAME`, and `--help` all 
 | File Type | File Count | Total Rows |
 |:----------|-----------:|-----------:|
 | (none)    |          1 |          3 |
-| .go       |          1 |        614 |
-| .md       |          2 |        148 |
+| .go       |          1 |        662 |
+| .md       |          2 |        156 |
 | .mod      |          1 |          3 |
 | .py       |          2 |          0 |
 | .toml     |          1 |         37 |
-| **TOTAL** |          8 |        805 |
+| **TOTAL** |          8 |        861 |
 
 <!-- mapDir: end -->
 
@@ -93,23 +94,47 @@ Empty directories are pruned from the output unless they hold a `.gitkeep`.
 `-init` writes a commented starter file. Two keys, both arrays of strings:
 
 ```toml
+# mapConfig.toml - stuff listed here is NOT shown or counted.
+#
+# usage:
+#   mapdir [path]              		print the tree
+#   mapdir -h / --help			    prints the help docs
+#   mapdir -c / --counts			print the tree with a rows of code table
+#   mapdir -i / --init [path]       write this file
+#   mapdir -r / --readme [path]     inject into README.md
+#   mapdir -r / --readme="DOCS.md" 	[path] inject into a different file
+#
+# -r rewrites whatever sits between these two markers, so drop them
+# into the target file first (they're HTML comments, invisible when
+# rendered):
+#
+#   <!-- mapDir: start -->
+#   <!-- mapDir: end -->
+#
+# Everything between them is replaced on every run; the markers
+# themselves stay put. Anything outside them is left alone.
+#
+# .gitignore is read automatically (including nested ones) - the rules
+# below stack on top of it.
+
 # gitignore-style globs, relative to the mapped root.
+# leading "/" anchors to root, trailing "/" matches dirs only,
+# leading "!" re-includes something an earlier rule dropped.
 ignore = [
     "*.png",
-    "/build/",
-    "**/testdata",
+    "*.svg",
+    "*.ico",
+    "*.icns",
 ]
 
-# bare extensions, dot optional. shorthand for "*.ext"
+# bare extensions, dot optional. shorthand for "*.ext" in ignore.
 ignore_exts = [
-    ".env",
-    "lock",
+	".env",
+	"lock",
+	"exe",
 ]
 ```
 
 Glob syntax matches `.gitignore`: a leading `/` anchors to the root, a
 trailing `/` matches directories only, a leading `!` re-includes, and `**`
 spans any number of path segments.
-
-Note that `-init` writes the config and exits — it won't also map the
-directory in the same run.

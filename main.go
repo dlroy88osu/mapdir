@@ -559,6 +559,54 @@ func init_config(root string, initCfg bool) {
 	os.Exit(0)
 }
 
+func usage() {
+	fmt.Print(`mapdir - directory tree mapper
+
+USAGE
+  mapdir [flags] [path]
+
+  path defaults to the current directory.
+
+FLAGS
+  -c, --counts           append a file-type / line-count table
+  -r, --readme           inject the tree into README.md
+  -r=NAME, --readme=NAME inject into NAME instead
+  -init, --init          write a starter mapConfig.toml, then exit
+  -h, --help             this text
+
+EXAMPLES
+  mapdir                      print tree for the current dir
+  mapdir C:\GitHub\proj       print tree for another dir
+  mapdir -c                   tree plus the counts table
+  mapdir -r -c                inject tree + table into README.md
+  mapdir -r=DOCS.md C:\proj   inject into proj\DOCS.md
+
+INJECTING
+  -r replaces whatever sits between these two markers. Put them in the
+  target file first; they're HTML comments, so they stay invisible once
+  rendered:
+
+    <!-- mapDir: start -->
+    <!-- mapDir: end -->
+
+  Everything outside the markers is left alone, so it's safe to re-run.
+  Injected entries are relative links, clickable on GitHub. If the
+  markers are missing, mapdir says so and exits without writing.
+
+FILTERING
+  Three layers stack, later wins, and within a layer the last matching
+  rule wins (same as git):
+
+    1. .git and .gitkeep are always skipped. A dir holding a .gitkeep
+       stays in the tree even when empty; other empty dirs are pruned.
+    2. .gitignore files, read per-directory as the walk descends.
+    3. mapConfig.toml in the mapped root, if present.
+
+  See the comments in the generated mapConfig.toml for the two keys it
+  understands.
+`)
+}
+
 func main() {
 	args := os.Args[1:]
 	initCfg := false
@@ -574,7 +622,7 @@ func main() {
 		case a == "-c" || a == "--counts":
 			withCounts = true
 		case a == "-h" || a == "--help":
-			fmt.Println("    > Usage: mapdir [-init] [-r[=name]] [path]")
+			usage()
 			return
 		case strings.HasPrefix(a, "-r=") || strings.HasPrefix(a, "--readme="):
 			injectReadme = true
