@@ -571,7 +571,7 @@ FLAGS
   -c, --counts           append a file-type / line-count table
   -r, --readme           inject the tree into README.md
   -r=NAME, --readme=NAME inject into NAME instead
-  -init, --init          write a starter mapConfig.toml, then exit
+  -i, --init          write a starter mapConfig.toml, then exit
   -h, --help             this text
 
 EXAMPLES

@@ -26,7 +26,7 @@ mapdir.exe -h                       # usage
 ```
 
 Long forms `--init`, `--counts `, `--readme`, `--readme=NAME`, and `--help` all work too.
-> Note that `-init` writes the config and exits — it won't also map the directory in the same run.
+> Note that `--init` writes the config and exits — it won't also map the directory in the same run.
 
 ## Actual Output (mapdir.exe -r -c)
 
@@ -91,7 +91,7 @@ Empty directories are pruned from the output unless they hold a `.gitkeep`.
 
 ### mapConfig.toml
 
-`-init` writes a commented starter file. Two keys, both arrays of strings:
+`--init` writes a commented starter file. Two keys, both arrays of strings:
 
 ```toml
 # mapConfig.toml - stuff listed here is NOT shown or counted.
