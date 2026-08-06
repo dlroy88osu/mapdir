@@ -15,7 +15,7 @@ const defaultConfig = `# mapConfig.toml - stuff listed here is NOT shown or coun
 # usage:
 #   mapdir [path]              		print the tree
 #   mapdir -c / --counts			print the tree with a rows of code table
-#   mapdir -init [path]        		write this file
+#   mapdir -i [path]        		write this file
 #   mapdir -r / --readme [path]     inject into README.md
 #   mapdir -r / --readme="DOCS.md" 	[path] inject into a different file
 #
@@ -617,7 +617,7 @@ func main() {
 
 	for _, a := range args {
 		switch {
-		case a == "-init" || a == "--init":
+		case a == "-i" || a == "--init":
 			initCfg = true
 		case a == "-c" || a == "--counts":
 			withCounts = true
