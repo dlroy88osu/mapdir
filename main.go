@@ -40,6 +40,8 @@ ignore = [
     "*.svg",
     "*.ico",
     "*.icns",
+    "*.gitignore",
+    "*mapConfig.toml",
 ]
 
 # bare extensions, dot optional. shorthand for "*.ext" in ignore.
