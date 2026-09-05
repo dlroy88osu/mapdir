@@ -1,63 +1,84 @@
+/*
+go build -ldflags="-s -w" -o mapdir.exe .
+go install .
+*/
+
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
-const defaultConfig = `# mapConfig.toml - stuff listed here is NOT shown or counted.
-#
-# usage:
-#   mapdir [path]              		print the tree
-#   mapdir -c / --counts			print the tree with a rows of code table
-#   mapdir -i [path]        		write this file
-#   mapdir -r / --readme [path]     inject into README.md
-#   mapdir -r / --readme="DOCS.md" 	[path] inject into a different file
-#
-# -r rewrites whatever sits between these two markers, so drop them
-# into the target file first (they're HTML comments, invisible when
-# rendered):
-#
-#   <!-- mapDir: start -->
-#   <!-- mapDir: end -->
-#
-# Everything between them is replaced on every run; the markers
-# themselves stay put. Anything outside them is left alone.
-#
-# .gitignore is read automatically (including nested ones) - the rules
-# below stack on top of it.
+/***************************************************************************************************
+ * [ Consts & help ]
+ **************************************************************************************************/
 
-# gitignore-style globs, relative to the mapped root.
-# leading "/" anchors to root, trailing "/" matches dirs only,
-# leading "!" re-includes something an earlier rule dropped.
-ignore = [
-    "*.png",
-    "*.svg",
-    "*.ico",
-    "*.icns",
-    "*.gitignore",
-    "*mapConfig.toml",
-]
-
-# bare extensions, dot optional. shorthand for "*.ext" in ignore.
-ignore_exts = [
-	".env",
-	"lock",
-	"exe",
-]
+const help = `
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                                  MAPDIR                                   ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║                                                                           ║
+║ Usage                                                                     ║
+║   mapdir      Print directory map to the console                          ║
+║   mapdir -h   Print help                                                  ║
+║   mapdir -i   Write a config file in the current directory                ║
+║   mapdir -p   Print only; do not inject into README ( or target file )    ║
+║                                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║                                                                           ║
+║ README injection                                                          ║
+║   mapdir looks for README.md ( or target file ) and replaces content      ║
+║   between these markers:                                                  ║
+║                                                                           ║
+║     <!-- mapDir: start -->                                                ║
+║     <!-- mapDir: end -->                                                  ║
+║                                                                           ║
+║   Keep both markers in the target file. If either is missing, mapdir      ║
+║   prints the result instead. Everything between them is replaced on       ║
+║   every run. That is the warning.                                         ║
+║                                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║                                                                           ║
+║ Ignore rules                                                              ║
+║   .gitignore is respected. Configured ignore rules are applied on top.    ║
+║                                                                           ║
+╚═══════════════════════════════════════════════════════════════════════════╝
 `
 
-const rmStart = "<!-- mapDir: start -->"
-const rmEnd = "<!-- mapDir: end -->"
+const config = `{
+    "insert_into": "README.md",
+    "gitignore_style_globs_ignore": [
+        "*.exe",
+        "*.md",
+        "*.gitignore",
+        "*mapDir.json"
+    ]
+}
+`
+const cfgPath = "mapDir.json"
+const red = "\x1b[38;5;203m"
+const res = "\x1b[0m"
+const ptr = "\x1b[38;5;75m\x1b[0m"
 
 /***************************************************************************************************
-* [ Parse mapConfig ]
-**************************************************************************************************/
+ * [ Config ]
+ **************************************************************************************************/
+type Config struct {
+	InsertInto string   `json:"insert_into"`
+	Ignore     []string `json:"gitignore_style_globs_ignore"`
+}
+
 type rule struct {
 	base     string
 	segments []string
@@ -66,84 +87,34 @@ type rule struct {
 	anchored bool
 }
 
-func loadConfig(root string) []rule {
-	b, err := os.ReadFile(filepath.Join(root, "mapConfig.toml"))
-	if err != nil {
-		return nil
+func loadConfig() (string, []rule) {
+	cfg := Config{
+		InsertInto: "README.md",
+		Ignore:     []string{},
 	}
-	arrays := map[string][]string{}
-	key, inArr := "", false
-	for _, raw := range strings.Split(string(b), "\n") {
-		ln := stripComment(raw)
-		if !inArr {
-			i := strings.Index(ln, "=")
-			if i < 0 {
-				continue
-			}
-			k := strings.TrimSpace(ln[:i])
-			v := strings.TrimSpace(ln[i+1:])
-			if !strings.HasPrefix(v, "[") {
-				continue
-			}
-			key, inArr = k, true
-			ln = v[1:]
-		}
-		if j := strings.Index(ln, "]"); j >= 0 {
-			arrays[key] = append(arrays[key], grabStrings(ln[:j])...)
-			inArr = false
-			continue
-		}
-		arrays[key] = append(arrays[key], grabStrings(ln)...)
+	var rules []rule
+
+	data, err := os.ReadFile(cfgPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cfg.InsertInto, rules
+	} else if err != nil {
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
+		os.Exit(1)
 	}
 
-	var out []rule
-	for _, p := range arrays["ignore"] {
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
+		os.Exit(1)
+	}
+
+	for _, p := range cfg.Ignore {
 		if r, ok := parseRule("", p); ok {
-			out = append(out, r)
+			rules = append(rules, r)
 		}
 	}
-	for _, e := range arrays["ignore_exts"] {
-		e = strings.TrimPrefix(strings.TrimSpace(e), ".")
-		if e == "" {
-			continue
-		}
-		if r, ok := parseRule("", "*."+e); ok {
-			out = append(out, r)
-		}
-	}
-	return out
-}
 
-func stripComment(s string) string {
-	q := false
-	for i, c := range s {
-		switch c {
-		case '"':
-			q = !q
-		case '#':
-			if !q {
-				return s[:i]
-			}
-		}
-	}
-	return s
-}
-
-func grabStrings(s string) []string {
-	var out []string
-	for {
-		i := strings.IndexAny(s, `"'`)
-		if i < 0 {
-			return out
-		}
-		q := s[i]
-		j := strings.IndexByte(s[i+1:], q)
-		if j < 0 {
-			return out
-		}
-		out = append(out, s[i+1:i+1+j])
-		s = s[i+2+j:]
-	}
+	fmt.Printf("%s Config loaded!", ptr)
+	return cfg.InsertInto, rules
 }
 
 func parseRule(base, line string) (rule, bool) {
@@ -187,24 +158,13 @@ type node struct {
 	keep  bool // dir holds a .gitkeep
 }
 
-type stat struct{ count, rows int }
-
-var stats = map[string]*stat{}
-
-func countLines(p string) int {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return 0
-	}
-	return strings.Count(string(b), "\n")
-}
-
 func walk(dir, rel string, rules []rule) *node {
 	n := &node{name: filepath.Base(dir), isDir: true}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return n
-	}
+    entries, err := os.ReadDir(dir)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "%s Could not read %s: %s%s\n", red, dir, err, res)
+        return n
+    }
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := strings.ToLower(entries[i].Name()), strings.ToLower(entries[j].Name())
 		if a != b {
@@ -239,18 +199,6 @@ func walk(dir, rel string, rules []rule) *node {
 			continue
 		}
 		files = append(files, &node{name: name})
-
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext == "" || ext == name { // "" or a dotfile like .gitignore
-			ext = "(none)"
-		}
-		s := stats[ext]
-		if s == nil {
-			s = &stat{}
-			stats[ext] = s
-		}
-		s.count++
-		s.rows += countLines(filepath.Join(dir, name))
 	}
 
 	for _, d := range dirs {
@@ -260,57 +208,6 @@ func walk(dir, rel string, rules []rule) *node {
 	}
 	n.kids = append(n.kids, files...)
 	return n
-}
-
-func table(md bool) []string {
-	if len(stats) == 0 {
-		return []string{"No tracked files found.", ""}
-	}
-	hExt, hCnt, hRow := "File Type", "File Count", "Total Rows"
-	wExt, wCnt, wRow := len(hExt), len(hCnt), len(hRow)
-	for ext, s := range stats {
-		wExt = max(wExt, len(ext)+2)
-		wCnt = max(wCnt, len(fmt.Sprint(s.count)))
-		wRow = max(wRow, len(fmt.Sprint(s.rows)))
-	}
-
-	keys := make([]string, 0, len(stats))
-	totC, totR := 0, 0
-	for k := range stats {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		totC, totR = totC+stats[k].count, totR+stats[k].rows
-	}
-
-	if md {
-		sep := "|:" + strings.Repeat("-", wExt+1) + "|" + strings.Repeat("-", wCnt+1) + ":|" + strings.Repeat("-", wRow+1) + ":|"
-		rows := []string{
-			fmt.Sprintf("| %-*s | %*s | %*s |", wExt, hExt, wCnt, hCnt, wRow, hRow), sep}
-		for _, k := range keys {
-			s := stats[k]
-			rows = append(rows, fmt.Sprintf("| %-*s | %*d | %*d |", wExt, k, wCnt, s.count, wRow, s.rows))
-		}
-		return append(rows,
-			fmt.Sprintf("| %-*s | %*d | %*d |", wExt, "**TOTAL**", wCnt, totC, wRow, totR), "")
-	}
-
-	// box-drawing rule: left, mid, right junction chars
-	bar := func(l, m, r string) string {
-		return l + strings.Repeat("─", wExt+2) + m + strings.Repeat("─", wCnt+2) +
-			m + strings.Repeat("─", wRow+2) + r
-	}
-	line := func(a string, b, c any) string {
-		return fmt.Sprintf("│ %-*s │ %*v │ %*v │", wExt, a, wCnt, b, wRow, c)
-	}
-
-	rows := []string{bar("┌", "┬", "┐"), line(hExt, hCnt, hRow), bar("├", "┼", "┤")}
-	for _, k := range keys {
-		s := stats[k]
-		rows = append(rows, line(k, s.count, s.rows))
-	}
-	return append(rows, bar("├", "┼", "┤"), line("TOTAL", totC, totR), bar("└", "┴", "┘"), "")
 }
 
 func matchSegments(pat, name []string) bool {
@@ -382,8 +279,59 @@ func loadGitignore(dir, base string) []rule {
 }
 
 /***************************************************************************************************
- * [ Print Results ]
+ * [ Inject ]
  **************************************************************************************************/
+
+// const (
+// 	indBar   = "│&nbsp;&nbsp;&nbsp;"
+// 	indBlank = "&nbsp;&nbsp;&nbsp;&nbsp;"
+// )
+
+func renderLinks(n *node, indent, dir string, out []string) []string {
+	for _, k := range n.kids {
+		rel := k.name
+		if dir != "" {
+			rel = dir + "/" + k.name
+		}
+
+		label := k.name
+		if k.isDir {
+			label += "/"
+		}
+
+		out = append(out, indent+"- "+mdLink(label, rel, k.isDir))
+
+		if k.isDir {
+			out = renderLinks(k, indent+"  ", rel, out)
+		}
+	}
+
+	return out
+}
+
+func mdLink(label, rel string, isDir bool) string {
+	target := "./" + rel
+	if isDir {
+		target += "/"
+	}
+
+	return `<a href="` + html.EscapeString(urlEscape(target)) + `">` +
+		html.EscapeString(label) +
+		`</a>`
+}
+
+func urlEscape(s string) string {
+	parts := strings.Split(s, "/")
+	for i, p := range parts {
+		parts[i] = (&url.URL{Path: p}).EscapedPath()
+	}
+	return strings.Join(parts, "/")
+}
+
+/***************************************************************************************************
+ * [ Add to readme ]
+ **************************************************************************************************/
+
 func render(n *node, prefix string, out *[]string) {
 	for i, k := range n.kids {
 		last := i == len(n.kids)-1
@@ -406,99 +354,43 @@ func render(n *node, prefix string, out *[]string) {
 	}
 }
 
-/***************************************************************************************************
- * [ Inject ]
- **************************************************************************************************/
-const (
-	indBar   = "│&nbsp;&nbsp;&nbsp;"
-	indBlank = "&nbsp;&nbsp;&nbsp;&nbsp;"
-)
-
-func renderLinks(n *node, prefix, dir string, out *[]string) {
-	for i, k := range n.kids {
-		last := i == len(n.kids)-1
-		conn := "├── "
-		if last {
-			conn = "└── "
-		}
-
-		rel := k.name
-		if dir != "" {
-			rel = dir + "/" + k.name
-		}
-
-		label := k.name
-		if k.isDir {
-			label += "/"
-		}
-
-		*out = append(*out, "- "+prefix+conn+mdLink(label, rel, k.isDir))
-
-		if k.isDir {
-			next := prefix + indBar
-			if last {
-				next = prefix + indBlank
-			}
-			renderLinks(k, next, rel, out)
-		}
-	}
-}
-
-func mdLink(label, rel string, isDir bool) string {
-	target := "./" + rel
-	if isDir {
-		target += "/"
-	}
-	return `<a href="` + htmlEscape(urlEscape(target)) + `">` + htmlEscape(label) + `</a>`
-}
-
-func htmlEscape(s string) string {
-	return strings.NewReplacer(
-		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;",
-	).Replace(s)
-}
-
-// urlEscape percent-encodes per path segment, leaving separators intact.
-func urlEscape(s string) string {
-	parts := strings.Split(s, "/")
-	for i, p := range parts {
-		parts[i] = (&url.URL{Path: p}).EscapedPath()
-	}
-	return strings.Join(parts, "/")
-}
-
-/***************************************************************************************************
- * [ Add to readme ]
- **************************************************************************************************/
-func injection(root string, tree *node, readmeName string, withCounts bool) {
-	p := filepath.Join(root, readmeName)
+func injection(root string, tree *node, rmName string) {
+	p := filepath.Join(root, rmName)
 	if _, err := os.Stat(p); err != nil {
-		fmt.Printf("    > unable to locate '%s': %v\n", readmeName, err)
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
 		os.Exit(1)
 	}
 
-	out := []string{"- " + filepath.Base(root) + "/"}
-	renderLinks(tree, "", "", &out)
-	out = append(out, "")
-	if withCounts {
-		out = append(out, table(true)...)
-	}
+    out := []string{
+        "- " + mdLink(filepath.Base(root)+"/", "", true),
+    }
+    out = renderLinks(tree, "  ", "", out)
+    out = append(out, "")
 
 	b, err := os.ReadFile(p)
 	if err != nil {
-		fmt.Printf("    > Unable to read '%s': %v\n", readmeName, err)
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
 		os.Exit(1)
 	}
 	src := string(b)
 
+	rmStart := "<!-- mapDir: start -->"
+	rmEnd := "<!-- mapDir: end -->"
+
 	i := strings.Index(src, rmStart)
 	if i < 0 {
-		fmt.Printf("    > No '%s' marker in '%s'\n", rmStart, readmeName)
-		os.Exit(1)
+		fmt.Printf("%s`%s` marker not in %s%s\n", red, rmStart, rmName, res)
+		return
 	}
+
+    if i > 0 && strings.TrimSpace(src[i-1:i]) != "" {
+        fmt.Printf("%s Tag commented or impeded by `%s`; ignoring.\n", ptr, src[i-1:i])
+        return
+    }
+
 	j := strings.Index(src[i:], rmEnd)
 	if j < 0 {
-		fmt.Printf("    > No '%s' marker after start in '%s'\n", rmEnd, readmeName)
+		fmt.Fprintf(os.Stderr, "%s`%s` not found after start in %s%s\n", red, rmEnd, rmName, res)
 		os.Exit(1)
 	}
 	j += i
@@ -512,153 +404,83 @@ func injection(root string, tree *node, readmeName string, withCounts bool) {
 	next := src[:i+len(rmStart)] + nl + body + nl + src[j:]
 
 	if next == src {
-		fmt.Println("    > Already up to date")
 		return
 	}
 	if err := os.WriteFile(p, []byte(next), 0644); err != nil {
-		fmt.Printf("    > Unable to write '%s': %v\n", readmeName, err)
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
 		os.Exit(1)
 	}
-	fmt.Printf("    > Injected %d lines into '%s'\n", len(out), readmeName)
+
+	fmt.Printf("%s %s has been updated!", ptr, rmName)
+}
+
+func printIt(root string, tree *node) {
+	out := []string{filepath.Base(root) + "/"}
+	render(tree, "", &out)
+	out = append(out, "")
+	fmt.Println()
+	for _, l := range out {
+		fmt.Println(l)
+	}
 }
 
 /***************************************************************************************************
- * [ init ]
+ * [ main ]
  **************************************************************************************************/
-func set_root(target string) string {
-	if target == "" {
-		target = "."
-	}
-
-	root, err := filepath.Abs(target)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
-		fmt.Fprintf(os.Stderr, "not a directory: %s\n", root)
-		os.Exit(1)
-	}
-
-	return root
-}
-
-func init_config(root string, initCfg bool) {
-	if !initCfg {
-		return
-	}
-
-	p := filepath.Join(root, "mapConfig.toml")
-	if _, err := os.Stat(p); err == nil {
-		fmt.Println("    > mapConfig.toml already exists, leaving it alone")
-	} else if err := os.WriteFile(p, []byte(defaultConfig), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	} else {
-		fmt.Println("    > Wrote", p)
-	}
-
-	os.Exit(0)
-}
-
-func usage() {
-	fmt.Print(`mapdir - directory tree mapper
-
-USAGE
-  mapdir [flags] [path]
-
-  path defaults to the current directory.
-
-FLAGS
-  -c, --counts           append a file-type / line-count table
-  -r, --readme           inject the tree into README.md
-  -r=NAME, --readme=NAME inject into NAME instead
-  -i, --init          write a starter mapConfig.toml, then exit
-  -h, --help             this text
-
-EXAMPLES
-  mapdir                      print tree for the current dir
-  mapdir C:\GitHub\proj       print tree for another dir
-  mapdir -c                   tree plus the counts table
-  mapdir -r -c                inject tree + table into README.md
-  mapdir -r=DOCS.md C:\proj   inject into proj\DOCS.md
-
-INJECTING
-  -r replaces whatever sits between these two markers. Put them in the
-  target file first; they're HTML comments, so they stay invisible once
-  rendered:
-
-    <!-- mapDir: start -->
-    <!-- mapDir: end -->
-
-  Everything outside the markers is left alone, so it's safe to re-run.
-  Injected entries are relative links, clickable on GitHub. If the
-  markers are missing, mapdir says so and exits without writing.
-
-FILTERING
-  Three layers stack, later wins, and within a layer the last matching
-  rule wins (same as git):
-
-    1. .git and .gitkeep are always skipped. A dir holding a .gitkeep
-       stays in the tree even when empty; other empty dirs are pruned.
-    2. .gitignore files, read per-directory as the walk descends.
-    3. mapConfig.toml in the mapped root, if present.
-
-  See the comments in the generated mapConfig.toml for the two keys it
-  understands.
-`)
-}
 
 func main() {
+	start := time.Now()
+	printOnly := false
+
 	args := os.Args[1:]
-	initCfg := false
-	target := "."
-	injectReadme := false
-	readmeName := "README.md"
-	withCounts := false
+	for _, arg := range args {
+		switch arg {
+		case "-h", "--help":
+			fmt.Print(help)
+			os.Exit(0)
 
-	for _, a := range args {
-		switch {
-		case a == "-i" || a == "--init":
-			initCfg = true
-		case a == "-c" || a == "--counts":
-			withCounts = true
-		case a == "-h" || a == "--help":
-			usage()
-			return
-		case strings.HasPrefix(a, "-r=") || strings.HasPrefix(a, "--readme="):
-			injectReadme = true
-			if v := a[strings.Index(a, "=")+1:]; v != "" {
-				readmeName = v
-			} else {
-				fmt.Println("    > Cannot have a null assignment, pass a name or drop the '='")
-			}
-		case a == "-r" || a == "--readme":
-			injectReadme = true
+        case "-i", "--init":
+            if _, err := os.Stat(cfgPath); err == nil {
+                fmt.Printf("%s %s already exists, leaving it alone!\n", ptr, cfgPath)
+                os.Exit(0)
+            } else if !errors.Is(err, fs.ErrNotExist) {
+                fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
+                os.Exit(1)
+            }
+
+            if err := os.WriteFile(cfgPath, []byte(config), 0o644); err != nil {
+                fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
+                os.Exit(1)
+            }
+
+            fmt.Printf("%s Boom config! %s\n", ptr, cfgPath)
+            os.Exit(0)
+
+		case "-p", "--print":
+			printOnly = true
+
 		default:
-			target = a
+			fmt.Fprintf(os.Stderr, "%s`%s` is an unknown argument, seek help!%s", red, arg, res)
+			fmt.Print(help)
+			os.Exit(1)
 		}
 	}
 
-	root := set_root(target)
-	init_config(root, initCfg)
-
-	rules := loadConfig(root)
-	tree := walk(root, "", rules)
-
-	if injectReadme {
-		injection(root, tree, readmeName, withCounts)
-	} else {
-		out := []string{filepath.Base(root) + "/"}
-		render(tree, "", &out)
-		out = append(out, "")
-		if withCounts {
-			out = append(out, table(false)...)
-		}
-
-		fmt.Println()
-		for _, l := range out {
-			fmt.Println(l)
-		}
+	root, err := filepath.Abs(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s %s%s\n", red, err, res)
+		os.Exit(1)
 	}
+
+	tgt, cfg := loadConfig()
+	tree := walk(root, "", cfg)
+
+	if !printOnly {
+		injection(root, tree, tgt)
+	}
+
+	printIt(root, tree)
+
+	elapsed := time.Since(start)
+	fmt.Printf("%s Walk finished in %s\n", ptr, elapsed)
 }
