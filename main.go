@@ -1,6 +1,5 @@
 /*
-go build -ldflags="-s -w" -o mapdir.exe .
-go install .
+GOBIN="$HOME/.local/bin" go install -trimpath -ldflags="-s -w" .
 */
 
 package main
@@ -411,7 +410,7 @@ func injection(root string, tree *node, rmName string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("%s %s has been updated!", ptr, rmName)
+	fmt.Printf("%s %s has been updated!\n", ptr, rmName)
 }
 
 func printIt(root string, tree *node) {
@@ -433,6 +432,10 @@ func main() {
 	printOnly := false
 
 	args := os.Args[1:]
+	if len(args) == 0 {
+		printOnly = true
+	}
+
 	for _, arg := range args {
 		switch arg {
 		case "-h", "--help":
